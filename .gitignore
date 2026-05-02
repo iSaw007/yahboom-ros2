@@ -1,0 +1,46 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# Python caching and metadata
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+
+# IDE settings
+.vscode/
+.idea/
+.project
+.pydevproject
+.settings/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Old/Archive files
+archives/
+_archive/
+*.bak
+*~
+
+
+# --- ros2_control and related ---
+
+frames_*.gv
+frames_*.pdf
+ROS2_CONTROL_PLAN.md
+src/.codex
+src/output.txt
+
+src/PROMPT.txt
