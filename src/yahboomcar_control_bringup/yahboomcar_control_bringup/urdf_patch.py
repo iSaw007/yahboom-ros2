@@ -111,9 +111,10 @@ def _inject_lidar(root: ET.Element, *, parent_link: str, lidar_frame: str, topic
                 return
 
     gazebo = ET.Element("gazebo", attrib={"reference": lidar_frame})
-    sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "front_lidar", "type": "lidar"})
+    sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "front_lidar", "type": "gpu_lidar"})
     ET.SubElement(sensor, "pose").text = "0 0 0 0 0 0"
-    ET.SubElement(sensor, "visualize").text = "false"
+    ET.SubElement(sensor, "visualize").text = "true"
+    ET.SubElement(sensor, "always_on").text = "1"
     ET.SubElement(sensor, "update_rate").text = "10"
 
     lidar = ET.SubElement(sensor, "lidar")

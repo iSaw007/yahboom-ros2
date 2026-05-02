@@ -48,7 +48,7 @@ def generate_launch_description() -> LaunchDescription:
     robot_description = inject_ros2_control_block(
         _read_file(urdf_path),
         controllers_yaml=controllers_path,
-        enable_lidar=False,
+        enable_lidar=True,
         lidar_parent_link="radar_Link",
         lidar_frame="laser_frame",
         lidar_topic="/scan",

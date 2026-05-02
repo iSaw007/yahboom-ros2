@@ -2,8 +2,24 @@
 <sdf version="1.7">
   <world name="default">
     <!-- Keep the default world as close as possible to the proven-safe minimal world. -->
-    <!-- Local-only ground + light avoid Fuel dependency while still giving the robot a floor. -->
-    
+    <plugin
+      filename="libignition-gazebo-physics-system.so"
+      name="ignition::gazebo::systems::Physics">
+    </plugin>
+    <plugin
+      filename="libignition-gazebo-user-commands-system.so"
+      name="ignition::gazebo::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="libignition-gazebo-scene-broadcaster-system.so"
+      name="ignition::gazebo::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="ignition-gazebo-sensors-system"
+      name="ignition::gazebo::systems::Sensors">
+      <!-- Changed ogre2 to ogre for better CPU lidar compatibility -->
+      <render_engine>ogre</render_engine>
+    </plugin>
 
     <light name="sun" type="directional">
       <pose>0 0 10 0 0 0</pose>
