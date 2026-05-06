@@ -52,6 +52,8 @@ def generate_launch_description() -> LaunchDescription:
         lidar_parent_link="radar_Link",
         lidar_frame="laser_frame",
         lidar_topic="/scan",
+        enable_imu=True,
+        enable_base_footprint=True,
     )
     robot_description = robot_description.replace(
         "package://yahboomcar_description/",
@@ -72,6 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
             "/scan@sensor_msgs/msg/LaserScan[ignition.msgs.LaserScan",
+            "/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU",
         ],
         output="screen",
     )
@@ -173,7 +176,7 @@ def generate_launch_description() -> LaunchDescription:
             clock_bridge,
             robot_state_publisher,
             spawn,
-            base_footprint_tf,
+            # base_footprint_tf,
             controller_spawners,
         ]
     )

@@ -17,6 +17,10 @@ def inject_ros2_control_block(
     lidar_parent_link: str = "radar_Link",
     lidar_frame: str = "laser_frame",
     lidar_topic: str = "/scan",
+    enable_imu: bool = False,
+    imu_link: str = "imu_Link",
+    imu_topic: str = "/imu",
+    enable_base_footprint: bool = True,
 ) -> str:
     """
     Inject a minimal <ros2_control> block into a CAD-export URDF.
@@ -85,6 +89,13 @@ def inject_ros2_control_block(
     if enable_lidar:
         _inject_lidar(root, parent_link=lidar_parent_link, lidar_frame=lidar_frame, topic=lidar_topic)
 
+    if enable_imu:
+        _inject_imu(root, reference_link=imu_link, topic=imu_topic)
+
+    if enable_base_footprint:
+        _inject_base_footprint(root)
+        _boost_base_mass(root, target_mass=1.0)
+
     # ElementTree doesn't preserve formatting; that's OK because this is runtime-only.
     return ET.tostring(root, encoding="unicode")
 
@@ -131,3 +142,73 @@ def _inject_lidar(root: ET.Element, *, parent_link: str, lidar_frame: str, topic
     ET.SubElement(sensor, "gz_frame_id").text = lidar_frame
 
     root.append(gazebo)
+
+
+def _inject_imu(root: ET.Element, *, reference_link: str, topic: str) -> None:
+    """
+    Attach an Ignition IMU sensor to the specified link.
+    """
+    # Avoid duplicate sensors if patched multiple times
+    for gz in root.findall("gazebo"):
+        if gz.get("reference") != reference_link:
+            continue
+        for sensor in gz.findall("sensor"):
+            if sensor.get("type") == "imu":
+                return
+
+    gazebo = ET.Element("gazebo", attrib={"reference": reference_link})
+    sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "imu_sensor", "type": "imu"})
+    ET.SubElement(sensor, "always_on").text = "1"
+    ET.SubElement(sensor, "update_rate").text = "50"
+    ET.SubElement(sensor, "visualize").text = "true"
+    ET.SubElement(sensor, "topic").text = topic
+
+    root.append(gazebo)
+
+
+def _inject_base_footprint(root: ET.Element) -> None:
+    """
+    Ensure base_footprint exists and is the parent of base_link.
+    This fixes the 'root link inertia' warning and stabilizes physics.
+    """
+    if root.find("./link[@name='base_footprint']") is not None:
+        return
+
+    # Create footprint (no mass, purely for TF/Root purposes)
+    footprint = ET.Element("link", attrib={"name": "base_footprint"})
+    root.insert(0, footprint)
+
+    # Move base_link to be a child of base_footprint
+    joint = ET.Element("joint", attrib={"name": "base_footprint_joint", "type": "fixed"})
+    ET.SubElement(joint, "origin", attrib={"xyz": "0 0 0", "rpy": "0 0 0"})
+    ET.SubElement(joint, "parent", attrib={"link": "base_footprint"})
+    ET.SubElement(joint, "child", attrib={"link": "base_link"})
+    root.insert(1, joint)
+
+
+def _boost_base_mass(root: ET.Element, target_mass: float = 1.0) -> None:
+    """
+    Override the mass of base_link to provide more physical 'heft'.
+    """
+    base_link = root.find("./link[@name='base_link']")
+    if base_link is None:
+        return
+
+    inertial = base_link.find("inertial")
+    if inertial is None:
+        inertial = ET.SubElement(base_link, "inertial")
+
+    mass_elem = inertial.find("mass")
+    if mass_elem is None:
+        mass_elem = ET.SubElement(inertial, "mass")
+
+    current_mass = float(mass_elem.get("value", "0.1"))
+    scale = target_mass / current_mass
+
+    mass_elem.set("value", str(target_mass))
+
+    inertia = inertial.find("inertia")
+    if inertia is not None:
+        for attr in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz"):
+            val = float(inertia.get(attr, "0.0"))
+            inertia.set(attr, str(val * scale))

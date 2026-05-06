@@ -15,6 +15,10 @@
       name="ignition::gazebo::systems::SceneBroadcaster">
     </plugin>
     <plugin
+      filename="ignition-gazebo-imu-system"
+      name="ignition::gazebo::systems::Imu">
+    </plugin>
+    <plugin
       filename="ignition-gazebo-sensors-system"
       name="ignition::gazebo::systems::Sensors">
       <!-- Changed ogre2 to ogre for better CPU lidar compatibility -->
