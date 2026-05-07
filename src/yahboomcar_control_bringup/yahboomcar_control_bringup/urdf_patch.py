@@ -126,7 +126,7 @@ def _inject_lidar(root: ET.Element, *, parent_link: str, lidar_frame: str, topic
     ET.SubElement(sensor, "pose").text = "0 0 0 0 0 0"
     ET.SubElement(sensor, "visualize").text = "true"
     ET.SubElement(sensor, "always_on").text = "1"
-    ET.SubElement(sensor, "update_rate").text = "10"
+    ET.SubElement(sensor, "update_rate").text = "30"
 
     lidar = ET.SubElement(sensor, "lidar")
     scan = ET.SubElement(lidar, "scan")
@@ -159,9 +159,10 @@ def _inject_imu(root: ET.Element, *, reference_link: str, topic: str) -> None:
     gazebo = ET.Element("gazebo", attrib={"reference": reference_link})
     sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "imu_sensor", "type": "imu"})
     ET.SubElement(sensor, "always_on").text = "1"
-    ET.SubElement(sensor, "update_rate").text = "50"
+    ET.SubElement(sensor, "update_rate").text = "100"
     ET.SubElement(sensor, "visualize").text = "true"
     ET.SubElement(sensor, "topic").text = topic
+    ET.SubElement(sensor, "gz_frame_id").text = reference_link
 
     root.append(gazebo)
 

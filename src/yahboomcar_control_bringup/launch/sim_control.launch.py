@@ -41,6 +41,7 @@ def generate_launch_description() -> LaunchDescription:
     world_path = os.path.join(bringup_share, "worlds", "empty.sdf")
     urdf_path = os.path.join(desc_share, "urdf", "MicroROS.urdf")
     controllers_path = os.path.join(bringup_share, "config", "controllers.yaml")
+    ekf_config_path = os.path.join(bringup_share, "config", "ekf.yaml")
 
     # Runtime-only injection: keeps the CAD-export URDF untouched on disk.
     # We also rewrite mesh URIs to absolute file:// paths because Gazebo Fortress doesn't
@@ -129,6 +130,14 @@ def generate_launch_description() -> LaunchDescription:
     # Start ros2_control spawners only after the model creation process has exited.
     # The LiDAR-enabled model takes longer to spawn, so a fixed timer can race the
     # controller_manager startup and leave the spawners waiting forever.
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        parameters=[ekf_config_path, {"use_sim_time": use_sim_time}],
+    )
+
     controller_spawners = RegisterEventHandler(
         OnProcessExit(
             target_action=spawn,
@@ -177,6 +186,7 @@ def generate_launch_description() -> LaunchDescription:
             robot_state_publisher,
             spawn,
             # base_footprint_tf,
+            ekf_node,
             controller_spawners,
         ]
     )
