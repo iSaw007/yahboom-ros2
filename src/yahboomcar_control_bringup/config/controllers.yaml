@@ -1,6 +1,6 @@
 controller_manager:
   ros__parameters:
-    update_rate: 200
+    update_rate: 100
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -21,7 +21,7 @@ diff_drive_controller:
     base_frame_id: base_footprint
     odom_frame_id: odom
     enable_odom_tf: false
-    publish_rate: 100.0
+    publish_rate: 50.0
 
     cmd_vel_timeout: 0.5
     use_stamped_vel: false

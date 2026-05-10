@@ -95,6 +95,7 @@ def inject_ros2_control_block(
     if enable_base_footprint:
         _inject_base_footprint(root)
         _boost_base_mass(root, target_mass=1.0)
+        _simplify_collisions(root)
 
     # ElementTree doesn't preserve formatting; that's OK because this is runtime-only.
     return ET.tostring(root, encoding="unicode")
@@ -126,7 +127,7 @@ def _inject_lidar(root: ET.Element, *, parent_link: str, lidar_frame: str, topic
     ET.SubElement(sensor, "pose").text = "0 0 0 0 0 0"
     ET.SubElement(sensor, "visualize").text = "true"
     ET.SubElement(sensor, "always_on").text = "1"
-    ET.SubElement(sensor, "update_rate").text = "30"
+    ET.SubElement(sensor, "update_rate").text = "20"
 
     lidar = ET.SubElement(sensor, "lidar")
     scan = ET.SubElement(lidar, "scan")
@@ -159,7 +160,7 @@ def _inject_imu(root: ET.Element, *, reference_link: str, topic: str) -> None:
     gazebo = ET.Element("gazebo", attrib={"reference": reference_link})
     sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "imu_sensor", "type": "imu"})
     ET.SubElement(sensor, "always_on").text = "1"
-    ET.SubElement(sensor, "update_rate").text = "100"
+    ET.SubElement(sensor, "update_rate").text = "50"
     ET.SubElement(sensor, "visualize").text = "true"
     ET.SubElement(sensor, "topic").text = topic
     ET.SubElement(sensor, "gz_frame_id").text = reference_link
@@ -213,3 +214,23 @@ def _boost_base_mass(root: ET.Element, target_mass: float = 1.0) -> None:
         for attr in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz"):
             val = float(inertia.get(attr, "0.0"))
             inertia.set(attr, str(val * scale))
+
+
+def _simplify_collisions(root: ET.Element) -> None:
+    """
+    Replace complex mesh collisions with a simple box for high-performance physics.
+    """
+    base_link = root.find("./link[@name='base_link']")
+    if base_link is None:
+        return
+
+    # Remove all existing collisions (typically heavy meshes)
+    for col in base_link.findall("collision"):
+        base_link.remove(col)
+
+    # Add a simple box collision roughly matching the car's body
+    collision = ET.SubElement(base_link, "collision", attrib={"name": "base_collision"})
+    # Center it slightly above the footprint so it covers the chassis
+    ET.SubElement(collision, "origin", attrib={"xyz": "0 0 0.05", "rpy": "0 0 0"})
+    geometry = ET.SubElement(collision, "geometry")
+    ET.SubElement(geometry, "box", attrib={"size": "0.25 0.18 0.1"})

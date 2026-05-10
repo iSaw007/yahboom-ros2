@@ -1,7 +1,7 @@
 ### ekf_filter_node configuration ###
 ekf_filter_node:
   ros__parameters:
-    frequency: 100.0
+    frequency: 50.0
     two_d_mode: true
     publish_acceleration: true
     publish_tf: true
@@ -29,7 +29,8 @@ ekf_filter_node:
                   false, false, true,
                   false, false, false,
                   false, false, true,
-                  false,  false, false]
+                  true,  false, false]
     imu0_differential: false
     imu0_relative: true
     imu0_remove_gravitational_acceleration: true
+    imu0_linear_acceleration_rejection_threshold: 10.0

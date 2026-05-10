@@ -26,6 +26,7 @@ def _read_file(path: str) -> str:
 
 def generate_launch_description() -> LaunchDescription:
     use_sim_time = LaunchConfiguration("use_sim_time")
+    world_config = LaunchConfiguration("world")
 
     bringup_share = get_package_share_directory("yahboomcar_control_bringup")
     desc_share = get_package_share_directory("yahboomcar_description")
@@ -38,7 +39,7 @@ def generate_launch_description() -> LaunchDescription:
     # `<prefix>/share/yahboomcar_description/...` (where your meshes live).
     desc_prefix_share = os.path.dirname(desc_share)
 
-    world_path = os.path.join(bringup_share, "worlds", "empty.sdf")
+    default_world_path = os.path.join(bringup_share, "worlds", "empty.sdf")
     urdf_path = os.path.join(desc_share, "urdf", "MicroROS.urdf")
     controllers_path = os.path.join(bringup_share, "config", "controllers.yaml")
     ekf_config_path = os.path.join(bringup_share, "config", "ekf.yaml")
@@ -65,7 +66,10 @@ def generate_launch_description() -> LaunchDescription:
         PythonLaunchDescriptionSource(os.path.join(ros_gz_share, "launch", "gz_sim.launch.py")),
         launch_arguments={
             # -r: run, -v 4: verbose enough to debug, but not insane.
-            "gz_args": f"-r -v 2 {world_path}",
+            "gz_args": [
+                TextSubstitution(text="-r -v 2 "),
+                world_config,
+            ],
         }.items(),
     )
 
@@ -145,9 +149,19 @@ def generate_launch_description() -> LaunchDescription:
         )
     )
 
+    # Bridge /cmd_vel (standard) to /diff_drive_controller/cmd_vel_unstamped (Humble default)
+    cmd_vel_relay = Node(
+        package="topic_tools",
+        executable="relay",
+        name="cmd_vel_relay",
+        arguments=["/cmd_vel", "/diff_drive_controller/cmd_vel_unstamped"],
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="true"),
+            DeclareLaunchArgument("world", default_value=default_world_path),
             SetEnvironmentVariable(
                 name="IGN_GAZEBO_RESOURCE_PATH",
                 value=[
@@ -185,8 +199,8 @@ def generate_launch_description() -> LaunchDescription:
             clock_bridge,
             robot_state_publisher,
             spawn,
-            # base_footprint_tf,
             ekf_node,
             controller_spawners,
+            cmd_vel_relay,
         ]
     )
