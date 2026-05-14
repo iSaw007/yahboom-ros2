@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 
 
 WHEEL_JOINTS = ("zq_Joint", "zh_Joint", "yq_Joint", "yh_Joint")
+HEAD_JOINTS = ("jq1_Joint", "jq2_Joint")
 
 
 def inject_ros2_control_block(
@@ -20,6 +21,9 @@ def inject_ros2_control_block(
     enable_imu: bool = False,
     imu_link: str = "imu_Link",
     imu_topic: str = "/imu",
+    enable_camera: bool = False,
+    camera_link: str = "jq2_Link",
+    camera_topic: str = "/camera/image_raw",
     enable_base_footprint: bool = True,
 ) -> str:
     """
@@ -53,6 +57,12 @@ def inject_ros2_control_block(
         for jname in WHEEL_JOINTS:
             j = ET.SubElement(ros2_control, "joint", attrib={"name": jname})
             ET.SubElement(j, "command_interface", attrib={"name": "velocity"})
+            ET.SubElement(j, "state_interface", attrib={"name": "position"})
+            ET.SubElement(j, "state_interface", attrib={"name": "velocity"})
+
+        for jname in HEAD_JOINTS:
+            j = ET.SubElement(ros2_control, "joint", attrib={"name": jname})
+            ET.SubElement(j, "command_interface", attrib={"name": "position"})
             ET.SubElement(j, "state_interface", attrib={"name": "position"})
             ET.SubElement(j, "state_interface", attrib={"name": "velocity"})
 
@@ -92,10 +102,14 @@ def inject_ros2_control_block(
     if enable_imu:
         _inject_imu(root, reference_link=imu_link, topic=imu_topic)
 
+    if enable_camera:
+        _inject_camera(root, reference_link=camera_link, topic=camera_topic)
+
     if enable_base_footprint:
         _inject_base_footprint(root)
         _boost_base_mass(root, target_mass=1.0)
         _simplify_collisions(root)
+        _fix_head_joint_limits(root)
 
     # ElementTree doesn't preserve formatting; that's OK because this is runtime-only.
     return ET.tostring(root, encoding="unicode")
@@ -234,3 +248,51 @@ def _simplify_collisions(root: ET.Element) -> None:
     ET.SubElement(collision, "origin", attrib={"xyz": "0 0 0.05", "rpy": "0 0 0"})
     geometry = ET.SubElement(collision, "geometry")
     ET.SubElement(geometry, "box", attrib={"size": "0.25 0.18 0.1"})
+
+
+def _fix_head_joint_limits(root: ET.Element) -> None:
+    """
+    Override zero-effort/velocity limits on revolute joints to allow motion.
+    """
+    for joint in root.findall(".//joint"):
+        name = joint.get("name")
+        if name in HEAD_JOINTS:
+            limit = joint.find("limit")
+            if limit is not None:
+                # Give it enough 'muscles' to hold up a camera
+                limit.set("effort", "10.0")
+                limit.set("velocity", "1.0")
+
+
+def _inject_camera(root: ET.Element, *, reference_link: str, topic: str) -> None:
+    """
+    Attach an Ignition RGBD camera sensor to the specified link.
+    """
+    # Avoid duplicate sensors if patched multiple times
+    for gz in root.findall("gazebo"):
+        if gz.get("reference") != reference_link:
+            continue
+        for sensor in gz.findall("sensor"):
+            if sensor.get("type") == "rgbd":
+                return
+
+    gazebo = ET.Element("gazebo", attrib={"reference": reference_link})
+    sensor = ET.SubElement(gazebo, "sensor", attrib={"name": "camera_sensor", "type": "camera"})
+    ET.SubElement(sensor, "always_on").text = "1"
+    ET.SubElement(sensor, "update_rate").text = "30"
+    ET.SubElement(sensor, "visualize").text = "true"
+    ET.SubElement(sensor, "topic").text = topic
+    ET.SubElement(sensor, "gz_frame_id").text = reference_link
+    ET.SubElement(sensor, "pose").text = "0.05 0 0 0 0 0"
+
+    camera = ET.SubElement(sensor, "camera")
+    ET.SubElement(camera, "horizontal_fov").text = "1.047"  # ~60 degrees
+    image = ET.SubElement(camera, "image")
+    ET.SubElement(image, "width").text = "640"
+    ET.SubElement(image, "height").text = "480"
+    ET.SubElement(image, "format").text = "R8G8B8"
+    clip = ET.SubElement(camera, "clip")
+    ET.SubElement(clip, "near").text = "0.05"
+    ET.SubElement(clip, "far").text = "8.0"
+
+    root.append(gazebo)

@@ -8,6 +8,9 @@ controller_manager:
     diff_drive_controller:
       type: diff_drive_controller/DiffDriveController
 
+    camera_controller:
+      type: position_controllers/JointGroupPositionController
+
 diff_drive_controller:
   ros__parameters:
     # SolidWorks-exported joint names. Keep the URDF untouched and configure here.
@@ -26,5 +29,13 @@ diff_drive_controller:
     cmd_vel_timeout: 0.5
     use_stamped_vel: false
     right_wheel_radius_multiplier: -1.0
+
+
+camera_controller:
+  ros__parameters:
+    joints:
+      - jq1_Joint
+      - jq2_Joint
+    interface_name: position
 
 

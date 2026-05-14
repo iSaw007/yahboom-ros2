@@ -28,6 +28,7 @@ setup(
         "console_scripts": [
             "robot_description_publisher = yahboomcar_control_bringup.robot_description_publisher:main",
             "spawn_entity = yahboomcar_control_bringup.spawn_entity:main",
+            "head_teleop = yahboomcar_control_bringup.head_teleop:main",
         ]
     },
 )

@@ -56,6 +56,7 @@ def generate_launch_description() -> LaunchDescription:
         lidar_topic="/scan",
         enable_imu=True,
         enable_base_footprint=True,
+        enable_camera=True,
     )
     robot_description = robot_description.replace(
         "package://yahboomcar_description/",
@@ -80,6 +81,10 @@ def generate_launch_description() -> LaunchDescription:
             "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
             "/scan@sensor_msgs/msg/LaserScan[ignition.msgs.LaserScan",
             "/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU",
+            "/camera/image_raw@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+            "/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
         ],
         output="screen",
     )
@@ -131,6 +136,13 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
+    camera_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["camera_controller", "--controller-manager", "/controller_manager"],
+        output="screen",
+    )
+
     # Start ros2_control spawners only after the model creation process has exited.
     # The LiDAR-enabled model takes longer to spawn, so a fixed timer can race the
     # controller_manager startup and leave the spawners waiting forever.
@@ -145,7 +157,12 @@ def generate_launch_description() -> LaunchDescription:
     controller_spawners = RegisterEventHandler(
         OnProcessExit(
             target_action=spawn,
-            on_exit=[TimerAction(period=2.0, actions=[joint_state_spawner, diff_drive_spawner])],
+            on_exit=[
+                TimerAction(
+                    period=2.0,
+                    actions=[joint_state_spawner, diff_drive_spawner, camera_spawner],
+                )
+            ],
         )
     )
 
