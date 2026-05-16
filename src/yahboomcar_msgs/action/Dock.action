@@ -1,0 +1,13 @@
+# Goal
+string dock_id          # Name of the dock in dock.yaml (e.g. "default")
+bool   cancel_nav       # If true, cancel current Nav2 task immediately
+---
+# Result
+bool   success
+string message
+---
+# Feedback
+string state            # STAGING, SEARCHING, TRACKING, APPROACH, etc.
+float32 distance_m      # Lidar distance
+float32 marker_area_px2 # ArUco area
+float32 error_x_px      # Horizontal alignment error

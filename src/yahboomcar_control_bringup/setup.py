@@ -29,6 +29,9 @@ setup(
             "robot_description_publisher = yahboomcar_control_bringup.robot_description_publisher:main",
             "spawn_entity = yahboomcar_control_bringup.spawn_entity:main",
             "head_teleop = yahboomcar_control_bringup.head_teleop:main",
+            "color_tracker = yahboomcar_control_bringup.color_tracker:main",
+            "aruco_detector = yahboomcar_control_bringup.aruco_detector:main",
+            "dock_coordinator = yahboomcar_control_bringup.dock_coordinator:main",
         ]
     },
 )

@@ -15,11 +15,11 @@ slam_toolbox:
     base_frame: base_footprint
     scan_topic: /scan
     use_map_saver: true
-    mode: localization #mapping
+    mode: mapping # localization or mapping
 
-    map_file_name: /home/salah/Storage/ros2-test/serialmap2
+    # map_file_name: /home/salah/Storage/ros2-test/serialmap2
     # map_start_pose: [0.0, 0.0, 0.0]
-    map_start_at_dock: true
+    # map_start_at_dock: true
 
     debug_logging: false
     throttle_scans: 1

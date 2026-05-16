@@ -1,0 +1,18 @@
+dock_coordinator:
+  ros__parameters:
+    # Staging distance from dock face (metres)
+    # The robot will drive here via Nav2 before starting visual search.
+    staging_distance: 1.0
+
+    # Dock database — keyed by dock_id
+    docks:
+      default:
+        # Physical coordinates of the marker in the warehouse.sdf (now on Box 1)
+        dock_x: -1.875
+        dock_y: -1.614
+        dock_yaw: 3.14159
+        
+        # Staging pose (1.0m East of dock, facing West)
+        staging_x: -0.875
+        staging_y: -1.614
+        staging_yaw: 3.14159

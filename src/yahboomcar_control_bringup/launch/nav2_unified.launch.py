@@ -14,17 +14,16 @@ def generate_launch_description():
     map_yaml_file = LaunchConfiguration('map')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    # Names of nodes to manage in order
+    # Names of nodes to manage in order. 
+    # Pruned to match typical Yahboom / Nav2 Simple configs
     lifecycle_nodes = [
         'map_server', 
         'amcl', 
-        'controller_server', 
-        'smoother_server', 
         'planner_server', 
+        'controller_server', 
         'behavior_server', 
         'bt_navigator', 
-        'waypoint_follower', 
-        'velocity_smoother'
+        'waypoint_follower'
     ]
 
     return LaunchDescription([
@@ -50,19 +49,20 @@ def generate_launch_description():
             parameters=[params_file]
         ),
 
-        # 3. Controller Server
-        Node(
-            package='nav2_controller',
-            executable='controller_server',
-            output='screen',
-            parameters=[params_file]
-        ),
-
-        # 4. Planner Server
+        # 3. Planner Server
         Node(
             package='nav2_planner',
             executable='planner_server',
             name='planner_server',
+            output='screen',
+            parameters=[params_file]
+        ),
+
+        # 4. Controller Server
+        Node(
+            package='nav2_controller',
+            executable='controller_server',
+            name='controller_server',
             output='screen',
             parameters=[params_file]
         ),
@@ -85,16 +85,7 @@ def generate_launch_description():
             parameters=[params_file]
         ),
 
-        # 7. Smoother Server
-        Node(
-            package='nav2_smoother',
-            executable='smoother_server',
-            name='smoother_server',
-            output='screen',
-            parameters=[params_file]
-        ),
-
-        # 8. Waypoint Follower
+        # 7. Waypoint Follower
         Node(
             package='nav2_waypoint_follower',
             executable='waypoint_follower',
@@ -103,20 +94,11 @@ def generate_launch_description():
             parameters=[params_file]
         ),
 
-        # 9. Velocity Smoother
-        Node(
-            package='nav2_velocity_smoother',
-            executable='velocity_smoother',
-            name='velocity_smoother',
-            output='screen',
-            parameters=[params_file]
-        ),
-
-        # THE MASTER MANAGER (This makes RViz happy)
+        # THE MASTER MANAGER (Renamed to 'lifecycle_manager_navigation' for RViz)
         Node(
             package='nav2_lifecycle_manager',
             executable='lifecycle_manager',
-            name='lifecycle_manager',
+            name='lifecycle_manager_navigation',
             output='screen',
             parameters=[{'use_sim_time': use_sim_time,
                          'autostart': True,

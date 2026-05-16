@@ -141,7 +141,7 @@ def _inject_lidar(root: ET.Element, *, parent_link: str, lidar_frame: str, topic
     ET.SubElement(sensor, "pose").text = "0 0 0 0 0 0"
     ET.SubElement(sensor, "visualize").text = "true"
     ET.SubElement(sensor, "always_on").text = "1"
-    ET.SubElement(sensor, "update_rate").text = "20"
+    ET.SubElement(sensor, "update_rate").text = "10"
 
     lidar = ET.SubElement(sensor, "lidar")
     scan = ET.SubElement(lidar, "scan")
