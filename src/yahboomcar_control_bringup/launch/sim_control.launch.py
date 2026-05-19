@@ -13,7 +13,7 @@ from launch.actions import (
 )
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import EnvironmentVariable, LaunchConfiguration, TextSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, TextSubstitution, PythonExpression
 from launch_ros.actions import Node
 
 from yahboomcar_control_bringup.urdf_patch import inject_ros2_control_block
@@ -68,7 +68,9 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             # -r: run, -v 4: verbose enough to debug, but not insane.
             "gz_args": [
-                TextSubstitution(text="-r -v 2 "),
+                TextSubstitution(text="-r "),
+                PythonExpression(["'-s ' if '", LaunchConfiguration('headless'), "' == 'true' else ''"]),
+                TextSubstitution(text="-v 2 "),
                 world_config,
             ],
         }.items(),
@@ -179,6 +181,7 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("world", default_value=default_world_path),
+            DeclareLaunchArgument("headless", default_value="false"),
             SetEnvironmentVariable(
                 name="IGN_GAZEBO_RESOURCE_PATH",
                 value=[

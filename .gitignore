@@ -44,3 +44,8 @@ src/.codex
 src/output.txt
 
 src/PROMPT.txt
+implementation_plan.md
+gzworld/gzworld.sdf
+
+#test
+bridge_test_suite
