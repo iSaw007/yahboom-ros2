@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Bool
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -10,13 +10,24 @@ class ColorTracker(Node):
     def __init__(self):
         super().__init__('color_tracker')
         
-        # Subscriptions & Publishers
+        self.bridge = CvBridge()
+        self.active = False  # Disabled by default to save CPU
+        
+        # Enable / Disable subscription
+        self.enable_sub = self.create_subscription(
+            Bool, '/color_tracker/enable', self.enable_callback, 10)
+        
+        # Camera Feed subscription
         self.subscription = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
+            
+        # Velocity controls publisher
         self.publisher = self.create_publisher(
             Float64MultiArray, '/camera_controller/commands', 10)
-        
-        self.bridge = CvBridge()
+            
+        # Debug stream publisher (headless)
+        self.debug_pub = self.create_publisher(
+            Image, '/color_tracker/debug_image', 10)
         
         # Target HSV range for RED (Red wraps around 0, so we use the first half)
         self.lower_red = np.array([0, 100, 100])
@@ -30,11 +41,24 @@ class ColorTracker(Node):
         self.kp_pan = 0.001   # Pixels to Radians for Pan
         self.kp_tilt = 0.001  # Pixels to Radians for Tilt
         
-        self.get_logger().info("Color Tracker Node Started. Looking for RED objects...")
+        self.get_logger().info("Color Tracker Node Initialized (Dormant). Waiting for activation on /color_tracker/enable...")
+
+    def enable_callback(self, msg: Bool):
+        self.active = msg.data
+        self.get_logger().info(f"Color Tracker state changed. Active: {self.active}")
 
     def image_callback(self, msg):
+        # Save CPU: Immediately return if not active
+        if not self.active:
+            return
+            
         # 1. Convert ROS Image to OpenCV
-        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f"cv_bridge conversion failed: {e}")
+            return
+            
         h, w, _ = frame.shape
         center_x, center_y = w // 2, h // 2
         
@@ -60,7 +84,6 @@ class ColorTracker(Node):
                 error_y = center_y - y
                 
                 # Update Pan (Left/Right) and Tilt (Up/Down)
-                # Note: error_x > 0 means object is on the LEFT, so we pan LEFT (increase pan)
                 self.pan += error_x * self.kp_pan
                 self.tilt += error_y * self.kp_tilt
                 
@@ -79,13 +102,16 @@ class ColorTracker(Node):
                 cv2.putText(frame, f"LOCK-ON: {int(area)}px", (10, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        # 5. UI Window
-        # Crosshair for center reference
+        # 5. Add Reference Crosshairs to Frame
         cv2.line(frame, (center_x - 10, center_y), (center_x + 10, center_y), (255, 255, 255), 1)
         cv2.line(frame, (center_x, center_y - 10), (center_x, center_y + 10), (255, 255, 255), 1)
         
-        cv2.imshow("Robot POV - Color Tracker", frame)
-        cv2.waitKey(1)
+        # 6. Publish Debug Frame Headless
+        try:
+            ros_image = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            self.debug_pub.publish(ros_image)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish debug image: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -95,7 +121,6 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
 

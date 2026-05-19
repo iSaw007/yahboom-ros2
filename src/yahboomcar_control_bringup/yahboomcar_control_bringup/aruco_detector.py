@@ -4,25 +4,17 @@ aruco_detector.py
 Detects ArUco marker ID 0 in the robot's camera feed and publishes its
 screen position and size.
 
-Written for OpenCV 4.5.4 (ROS 2 Humble system package).
-Does NOT use the new ArucoDetector class (OpenCV >= 4.7 only).
-
-Publishes:
-  /dock/detection (std_msgs/Float64MultiArray)
-    data[0] = marker_id  (-1.0 if no marker detected)
-    data[1] = center_x   (pixels, 0..640)
-    data[2] = center_y   (pixels, 0..480)
-    data[3] = area       (pixels squared, grows as robot gets closer)
+Only processes camera images when activated via /dock/enable_detector.
+Publishes annotated video stream to /dock/debug_image (headless mode).
 """
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Bool
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-
 
 # ArUco dictionary — must match the marker you generated
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -42,6 +34,15 @@ class ArucoDetector(Node):
         super().__init__('aruco_detector')
 
         self.bridge = CvBridge()
+        self.active = False  # Disabled by default to save CPU
+
+        # Subscribe to enable/disable topic
+        self.enable_sub = self.create_subscription(
+            Bool,
+            '/dock/enable_detector',
+            self.enable_callback,
+            10
+        )
 
         # Subscribe to the robot's camera
         self.sub = self.create_subscription(
@@ -58,13 +59,27 @@ class ArucoDetector(Node):
             10
         )
 
-        self.get_logger().info(
-            'ArUco Detector started. '
-            f'Looking for DICT_4X4_50 marker ID {TARGET_ID}. '
-            'OpenCV version: ' + cv2.__version__
+        # Publish debug annotated image stream
+        self.debug_pub = self.create_publisher(
+            Image,
+            '/dock/debug_image',
+            10
         )
 
+        self.get_logger().info(
+            'ArUco Detector initialized (Dormant). '
+            'Waiting for activation on /dock/enable_detector...'
+        )
+
+    def enable_callback(self, msg: Bool):
+        self.active = msg.data
+        self.get_logger().info(f'ArUco Detector state changed. Active: {self.active}')
+
     def image_callback(self, msg: Image):
+        # Save CPU: Immediately return if not active
+        if not self.active:
+            return
+
         # --- Convert ROS image to OpenCV BGR frame ---
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -124,13 +139,12 @@ class ArucoDetector(Node):
             cv2.putText(debug, 'NO MARKER', (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-        # --- Show debug window ---
-        cv2.imshow('ArUco Detector - Robot POV', debug)
-        cv2.waitKey(1)
-
-    def destroy_node(self):
-        cv2.destroyAllWindows()
-        super().destroy_node()
+        # --- Publish debug frame headless ---
+        try:
+            ros_image = self.bridge.cv2_to_imgmsg(debug, encoding="bgr8")
+            self.debug_pub.publish(ros_image)
+        except Exception as e:
+            self.get_logger().error(f'Failed to publish debug image: {e}')
 
 
 def main(args=None):

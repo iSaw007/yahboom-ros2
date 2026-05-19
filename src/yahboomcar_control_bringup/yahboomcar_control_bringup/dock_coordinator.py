@@ -22,7 +22,7 @@ from rclpy.executors import MultiThreadedExecutor
 
 from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Bool
 from yahboomcar_msgs.action import Dock
 
 # ── Tuning constants ───────────────────────────────────────────────────────────
@@ -70,6 +70,8 @@ class DockCoordinator(Node):
             Twist, '/diff_drive_controller/cmd_vel_unstamped', 10)
         self.head_pub = self.create_publisher(
             Float64MultiArray, '/camera_controller/commands', 10)
+        self.enable_pub = self.create_publisher(
+            Bool, '/dock/enable_detector', 10)
 
         # ── Subscribers ───────────────────────────────────────────────────────
         self.create_subscription(
@@ -104,6 +106,21 @@ class DockCoordinator(Node):
         return CancelResponse.ACCEPT
 
     async def execute_callback(self, goal_handle):
+        """The main mission loop wrapper to handle CV activation/deactivation."""
+        enable_msg = Bool()
+        enable_msg.data = True
+        self.enable_pub.publish(enable_msg)
+        self.get_logger().info('Activating ArUco Detector for docking mission.')
+        
+        try:
+            return await self._execute_callback_impl(goal_handle)
+        finally:
+            disable_msg = Bool()
+            disable_msg.data = False
+            self.enable_pub.publish(disable_msg)
+            self.get_logger().info('Putting ArUco Detector back to sleep.')
+
+    async def _execute_callback_impl(self, goal_handle):
         """The main mission loop."""
         result = Dock.Result()
         feedback = Dock.Feedback()
@@ -131,6 +148,14 @@ class DockCoordinator(Node):
         
         from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
         nav = BasicNavigator()
+        
+        # Check if the navigation server is actually running
+        if not nav.nav_to_pose_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error('Failed to connect to Nav2 (NavigateToPose action server not available)! Aborting.')
+            result.success = False
+            result.message = "Failed to connect to Nav2"
+            goal_handle.abort()
+            return result
         
         if goal_handle.request.cancel_nav:
             nav.cancelTask()
