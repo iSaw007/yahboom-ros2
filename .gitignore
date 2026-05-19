@@ -49,3 +49,6 @@ gzworld/gzworld.sdf
 
 #test
 bridge_test_suite
+cpu-optimization.md
+multipl_pose.md
+path_planning.md
