@@ -18,7 +18,8 @@ def generate_launch_description():
         package='yahboomcar_control_bringup',
         executable='aruco_detector',
         name='aruco_detector',
-        output='screen'
+        output='screen',
+        parameters=[dock_config]
     )
 
     # 2. The Brain: Action Server for Staged Docking

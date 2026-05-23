@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -31,6 +31,9 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time", default_value="true", description="Use simulation time"
     )
+    quiet_arg = DeclareLaunchArgument(
+        "quiet", default_value="false", description="Reduce terminal noise from infrastructure nodes"
+    )
     headless_arg = DeclareLaunchArgument(
         "headless", default_value="false", description="Run Gazebo headless"
     )
@@ -53,6 +56,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "headless": LaunchConfiguration("headless"),
+            "quiet": LaunchConfiguration("quiet"),
         }.items()
     )
 
@@ -73,7 +77,7 @@ def generate_launch_description():
         package="web_video_server",
         executable="web_video_server",
         name="web_video_server",
-        output="screen",
+        output=PythonExpression(["'log' if '", LaunchConfiguration("quiet"), "' == 'true' else 'screen'"]),
         condition=IfCondition(LaunchConfiguration("video_server")),
         parameters=[{"port": 8080}]
     )
@@ -86,6 +90,7 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "map": LaunchConfiguration("map"),
             "params_file": LaunchConfiguration("nav2_params"),
+            "quiet": LaunchConfiguration("quiet"),
         }.items()
     )
 
@@ -102,6 +107,7 @@ def generate_launch_description():
         rosbridge_arg,
         video_server_arg,
         use_sim_time_arg,
+        quiet_arg,
         headless_arg,
         map_arg,
         nav2_params_arg,

@@ -27,6 +27,8 @@ def _read_file(path: str) -> str:
 def generate_launch_description() -> LaunchDescription:
     use_sim_time = LaunchConfiguration("use_sim_time")
     world_config = LaunchConfiguration("world")
+    quiet = LaunchConfiguration("quiet")
+    node_output = PythonExpression(["'log' if '", quiet, "' == 'true' else 'screen'"])
 
     bringup_share = get_package_share_directory("yahboomcar_control_bringup")
     desc_share = get_package_share_directory("yahboomcar_description")
@@ -88,7 +90,7 @@ def generate_launch_description() -> LaunchDescription:
             "/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
             "/camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
         ],
-        output="screen",
+        output=node_output,
     )
 
     robot_state_publisher = Node(
@@ -96,7 +98,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="robot_state_publisher",
         name="robot_state_publisher",
         parameters=[{"use_sim_time": use_sim_time, "robot_description": robot_description}],
-        output="screen",
+        output=node_output,
     )
 
     # Spawn the URDF into Gazebo via the official create node.
@@ -111,7 +113,7 @@ def generate_launch_description() -> LaunchDescription:
             "-z",
             "0.30",
         ],
-        output="screen",
+        output=node_output,
     )
 
 
@@ -121,28 +123,28 @@ def generate_launch_description() -> LaunchDescription:
         executable="static_transform_publisher",
         arguments=["0", "0", "0", "0", "0", "0", "base_footprint", "base_link"],
         parameters=[{"use_sim_time": use_sim_time}],
-        output="screen",
+        output=node_output,
     )
 
     joint_state_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
-        output="screen",
+        output=node_output,
     )
 
     diff_drive_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=["diff_drive_controller", "--controller-manager", "/controller_manager"],
-        output="screen",
+        output=node_output,
     )
 
     camera_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=["camera_controller", "--controller-manager", "/controller_manager"],
-        output="screen",
+        output=node_output,
     )
 
     # Start ros2_control spawners only after the model creation process has exited.
@@ -152,7 +154,7 @@ def generate_launch_description() -> LaunchDescription:
         package="robot_localization",
         executable="ekf_node",
         name="ekf_filter_node",
-        output="screen",
+        output=node_output,
         parameters=[ekf_config_path, {"use_sim_time": use_sim_time}],
     )
 
@@ -175,6 +177,7 @@ def generate_launch_description() -> LaunchDescription:
         name="cmd_vel_relay",
         arguments=["/cmd_vel", "/diff_drive_controller/cmd_vel_unstamped"],
         parameters=[{"use_sim_time": use_sim_time}],
+        output=node_output,
     )
 
     return LaunchDescription(
@@ -182,6 +185,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("world", default_value=default_world_path),
             DeclareLaunchArgument("headless", default_value="false"),
+            DeclareLaunchArgument("quiet", default_value="false"),
             SetEnvironmentVariable(
                 name="IGN_GAZEBO_RESOURCE_PATH",
                 value=[

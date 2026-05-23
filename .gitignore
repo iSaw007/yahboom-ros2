@@ -52,3 +52,6 @@ bridge_test_suite
 cpu-optimization.md
 multipl_pose.md
 path_planning.md
+.codex
+forward-funnel.md
+funnel-docking.md

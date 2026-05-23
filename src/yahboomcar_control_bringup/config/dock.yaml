@@ -16,3 +16,17 @@ dock_coordinator:
         staging_x: -0.875
         staging_y: -1.614
         staging_yaw: 3.14159
+        # Nav2 controller choice for STAGING: mppi | rpp | dwb (pins controller_id via BT override)
+        staging_controller: mppi
+
+aruco_detector:
+  ros__parameters:
+    dock_id: default
+    docks:
+      default:
+        markers:
+          # Dock frame origin at center marker (ID 0)
+          m0: {x: 0.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+          # Flipped funnel geometry (matches gzworld/warehouse.sdf)
+          m1: {x: -0.042, y: -0.085, z: 0.0, yaw_deg: -45.0}
+          m2: {x: -0.042, y:  0.085, z: 0.0, yaw_deg:  45.0}
