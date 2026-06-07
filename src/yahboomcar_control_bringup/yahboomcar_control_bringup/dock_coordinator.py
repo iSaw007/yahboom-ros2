@@ -16,6 +16,10 @@ Handover pattern:
 
 import math
 import time
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Optional
+
 import numpy as np
 
 import rclpy
@@ -42,16 +46,51 @@ KP_PAN           = 0.5      # Proportional gain for head panning
 KP_TILT          = 0.5      # Proportional gain for head tilting
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Quaternion math helpers
-def multiply_quaternions(q1, q2):
-    x1, y1, z1, w1 = q1
-    x2, y2, z2, w2 = q2
-    return np.array([
-        w1*x2 + x1*w2 + y1*z2 - z1*y2,
-        w1*y2 - x1*z2 + y1*w2 + z1*x2,
-        w1*z2 + x1*y2 - y1*x2 + z1*w2,
-        w1*w2 - x1*x2 - y1*y2 - z1*z2
-    ])
+
+class DockState(Enum):
+    STAGING_CORRECTION = auto()
+    SEARCHING = auto()
+    TRACKING = auto()
+    APPROACH = auto()
+    LOST = auto()
+    DOCKED = auto()
+
+
+class MissionTerminal(Enum):
+    NONE = auto()
+    SUCCEEDED = auto()
+    ABORTED = auto()
+
+
+@dataclass
+class MissionContext:
+    # ── State timers ─────────────────────────────
+    state_enter_t: float = field(default_factory=time.perf_counter)
+
+    # ── TRACKING / APPROACH ──────────────────────
+    loss_start_t: Optional[float] = None
+    lock_start_t: Optional[float] = None
+
+    # ── LOST ─────────────────────────────────────
+    prev_state: DockState = DockState.SEARCHING
+    lost_enter_t: Optional[float] = None
+
+    # ── SEARCHING ────────────────────────────────
+    search_phase: str = 'pan_left'
+    center_seen_start_t: Optional[float] = None
+    settle_start_t: Optional[float] = None
+    last_center_seen_t: Optional[float] = None
+
+    # ── Throttle timestamps ──────────────────────
+    last_funnel_log_t: float = 0.0
+    last_tf_err_log_t: float = 0.0
+
+
+@dataclass
+class StateTransition:
+    next_state: DockState
+    terminal: MissionTerminal = MissionTerminal.NONE
+    message: str = ''
 
 def quaternion_to_rotation_matrix(q):
     qx, qy, qz, qw = q
@@ -136,13 +175,274 @@ class DockCoordinator(Node):
         # ── Internal servo state ──────────────────────────────────────────────
         self._pan_angle  = 0.0
         self._tilt_angle = 0.0
-        self._last_twist = Twist()
 
-        # ── Center-marker debounce / settle state ────────────────────────────
-        self._center_seen_start_t = None
-        self._settle_start_t = None
+        # ── LiDAR scan metadata logging ─────────────────────────────────────
+        self._scan_meta_logged = False
 
         self.get_logger().info('Dock Action Server is ONLINE and IDLE.')
+
+    def _on_enter(self, state: DockState, ctx: MissionContext, prev: DockState) -> None:
+        ctx.state_enter_t = time.perf_counter()
+        self.get_logger().info(f'State: {prev.name} -> {state.name}')
+
+        if state == DockState.SEARCHING:
+            ctx.search_phase = 'pan_left'
+            ctx.center_seen_start_t = None
+            ctx.settle_start_t = None
+            ctx.last_center_seen_t = None
+
+        elif state == DockState.TRACKING:
+            ctx.lock_start_t = None
+            ctx.loss_start_t = None
+
+        elif state == DockState.APPROACH:
+            ctx.loss_start_t = None
+
+        elif state == DockState.LOST:
+            ctx.prev_state = prev
+            ctx.lost_enter_t = time.perf_counter()
+            ctx.loss_start_t = None
+
+    def _handle_staging_correction(
+        self,
+        ctx: MissionContext,
+        pose_msg,
+        pose_fresh: bool,
+        params: dict,
+    ) -> StateTransition:
+        correction_timeout_s = params['staging_correction_timeout_s']
+        correction_spin_speed = params['staging_correction_spin_speed']
+        omega_sign_left = params['staging_correction_omega_sign_left']
+        omega_sign_right = params['staging_correction_omega_sign_right']
+
+        if pose_fresh and self.marker_best_id == 0:
+            return StateTransition(DockState.SEARCHING)
+
+        if (time.perf_counter() - ctx.state_enter_t) > correction_timeout_s:
+            self.get_logger().warn('STAGING_CORRECTION timeout. Falling back to SEARCHING.')
+            return StateTransition(DockState.SEARCHING)
+
+        omega = 0.0
+        if self.marker_best_id == 1:
+            omega = omega_sign_left * correction_spin_speed
+        elif self.marker_best_id == 2:
+            omega = omega_sign_right * correction_spin_speed
+        elif self.marker_best_id == 3:
+            omega = 0.0
+        else:
+            return StateTransition(DockState.SEARCHING)
+
+        self._publish_vel(0.0, omega)
+        self._publish_head(0.0, 0.0)
+
+        return StateTransition(DockState.STAGING_CORRECTION)
+
+    def _handle_searching(
+        self,
+        ctx: MissionContext,
+        pose_msg,
+        pose_fresh: bool,
+        params: dict,
+    ) -> StateTransition:
+        now = time.perf_counter()
+        center_lock_time_s = params['center_lock_time_s']
+        settle_time_s = params['settle_time_s']
+
+        if pose_fresh and self.marker_best_id == 0:
+            ctx.last_center_seen_t = now
+            if ctx.center_seen_start_t is None:
+                ctx.center_seen_start_t = now
+                ctx.settle_start_t = None
+        elif ctx.last_center_seen_t is not None and (now - ctx.last_center_seen_t) > 0.25:
+            ctx.center_seen_start_t = None
+            ctx.settle_start_t = None
+            ctx.last_center_seen_t = None
+
+        if ctx.center_seen_start_t is not None:
+            self._publish_vel(0.0, 0.0)
+            self._publish_head(self._pan_angle, 0.0)
+
+            if (now - ctx.center_seen_start_t) >= center_lock_time_s:
+                if ctx.settle_start_t is None:
+                    ctx.settle_start_t = now
+                elif (now - ctx.settle_start_t) >= settle_time_s:
+                    return StateTransition(DockState.TRACKING)
+
+            return StateTransition(DockState.SEARCHING)
+
+        if (now - ctx.state_enter_t) > SEARCH_TIMEOUT:
+            return StateTransition(
+                DockState.SEARCHING,
+                terminal=MissionTerminal.ABORTED,
+                message='Search timeout',
+            )
+
+        self._publish_vel(0.0, 0.0)
+        if ctx.search_phase == 'pan_left':
+            self._pan_angle += 0.05
+            if self._pan_angle >= 1.2:
+                ctx.search_phase = 'pan_right'
+        elif ctx.search_phase == 'pan_right':
+            self._pan_angle -= 0.05
+            if self._pan_angle <= -1.2:
+                ctx.search_phase = 'recenter'
+        elif ctx.search_phase == 'recenter':
+            if self._pan_angle < -0.05:
+                self._pan_angle += 0.05
+            elif self._pan_angle > 0.05:
+                self._pan_angle -= 0.05
+            else:
+                self._pan_angle = 0.0
+                ctx.search_phase = 'spin'
+        elif ctx.search_phase == 'spin':
+            self._publish_vel(0.0, SEARCH_SPIN_SPEED)
+
+        self._publish_head(self._pan_angle, 0.0)
+        return StateTransition(DockState.SEARCHING)
+
+    def _handle_tracking(
+        self,
+        ctx: MissionContext,
+        pose_msg: PoseStamped,
+        pose_fresh: bool,
+        params: dict,
+    ) -> StateTransition:
+        if not pose_fresh:
+            self._publish_vel(0.0, 0.0)
+            if ctx.loss_start_t is None:
+                ctx.loss_start_t = time.perf_counter()
+            elif (time.perf_counter() - ctx.loss_start_t) > LOSS_FULL_TIME:
+                return StateTransition(DockState.LOST)
+            return StateTransition(DockState.TRACKING)
+
+        ctx.loss_start_t = None
+        return self._handle_visual_servo(ctx, pose_msg, tracking_only=True)
+
+    def _handle_approach(
+        self,
+        ctx: MissionContext,
+        pose_msg: PoseStamped,
+        pose_fresh: bool,
+        params: dict,
+    ) -> StateTransition:
+        if not pose_fresh:
+            self._publish_vel(0.0, 0.0)
+            if ctx.loss_start_t is None:
+                ctx.loss_start_t = time.perf_counter()
+            elif (time.perf_counter() - ctx.loss_start_t) > LOSS_FULL_TIME:
+                return StateTransition(DockState.LOST)
+            return StateTransition(DockState.APPROACH)
+
+        ctx.loss_start_t = None
+        return self._handle_visual_servo(ctx, pose_msg, tracking_only=False)
+
+    def _handle_visual_servo(
+        self,
+        ctx: MissionContext,
+        pose_msg: PoseStamped,
+        tracking_only: bool,
+    ) -> StateTransition:
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'base_footprint',
+                pose_msg.header.frame_id,
+                rclpy.time.Time.from_msg(pose_msg.header.stamp),
+                rclpy.duration.Duration(seconds=0.1)
+            )
+
+            tx = transform.transform.translation.x
+            ty = transform.transform.translation.y
+            tz = transform.transform.translation.z
+            qx = transform.transform.rotation.x
+            qy = transform.transform.rotation.y
+            qz = transform.transform.rotation.z
+            qw = transform.transform.rotation.w
+
+            q_trans = np.array([qx, qy, qz, qw])
+            R_trans = quaternion_to_rotation_matrix(q_trans)
+
+            px = pose_msg.pose.position.x
+            py = pose_msg.pose.position.y
+            pz = pose_msg.pose.position.z
+            p_opt = np.array([px, py, pz])
+
+            p_base = np.dot(R_trans, p_opt) + np.array([tx, ty, tz])
+        except Exception as e:
+            now = time.perf_counter()
+            if (now - ctx.last_tf_err_log_t) > 1.0:
+                self.get_logger().error(f'TF Transform failed: {e}')
+                ctx.last_tf_err_log_t = now
+            self._publish_vel(0.0, 0.0)
+            return StateTransition(DockState.TRACKING if tracking_only else DockState.APPROACH)
+
+        x_d = p_base[1]
+        z_d = p_base[0]
+
+        alpha = math.atan2(x_d, z_d)
+        pan_error = alpha - self._pan_angle
+        self._pan_angle += KP_PAN * pan_error
+        self._tilt_angle = 0.0
+        K_omega = 0.6
+        APPROACH_SPEED = 0.08
+
+        omega = float(np.clip(K_omega * alpha, -0.5, 0.5))
+        linear_v = 0.0 if tracking_only else max(0.0, APPROACH_SPEED * math.cos(alpha))
+
+        if tracking_only:
+            self._publish_vel(0.0, omega)
+            self._publish_head(self._pan_angle, self._tilt_angle)
+
+            if abs(alpha) < 0.1:
+                if ctx.lock_start_t is None:
+                    ctx.lock_start_t = time.perf_counter()
+                elif (time.perf_counter() - ctx.lock_start_t) >= LOCK_DURATION:
+                    return StateTransition(DockState.APPROACH)
+            else:
+                ctx.lock_start_t = None
+
+            return StateTransition(DockState.TRACKING)
+
+        if z_d < 0.45:
+            now = time.perf_counter()
+            if (now - ctx.last_funnel_log_t) > 1.0:
+                self.get_logger().info(f'Funnel Interlock engaged (z_d={z_d:.3f}m)')
+                ctx.last_funnel_log_t = now
+            self._publish_vel(0.05, 0.0)
+            self._publish_head(0.0, 0.0)
+
+            if self.lidar_front < DOCK_LIDAR_DIST:
+                return StateTransition(DockState.DOCKED)
+
+            return StateTransition(DockState.APPROACH)
+
+        self._publish_vel(linear_v, omega)
+        self._publish_head(self._pan_angle, self._tilt_angle)
+        return StateTransition(DockState.APPROACH)
+
+    def _handle_lost(
+        self,
+        ctx: MissionContext,
+        pose_msg: Optional[PoseStamped],
+        pose_fresh: bool,
+        params: dict,
+    ) -> StateTransition:
+        if pose_fresh:
+            return StateTransition(ctx.prev_state)
+
+        self._publish_vel(0.0, 0.0)
+        self._publish_head(0.0, 0.0)
+
+        if (time.perf_counter() - ctx.lost_enter_t) > LOSS_FULL_TIME:
+            return StateTransition(DockState.SEARCHING)
+
+        return StateTransition(DockState.LOST)
+
+    def _handle_docked(self, ctx: MissionContext, pose_msg, pose_fresh: bool, params: dict) -> StateTransition:
+        return StateTransition(
+            DockState.DOCKED,
+            terminal=MissionTerminal.SUCCEEDED,
+            message='Docking completed successfully',
+        )
 
     def _resolve_staging_bt_xml(self, controller_choice: str) -> str:
         """
@@ -222,7 +522,7 @@ class DockCoordinator(Node):
             # Still apply debounce/settle logic; start in SEARCHING so we don't
             # immediately enter TRACKING on a single fleeting frame.
             self.get_logger().info('Center marker visible at start. Bypassing Nav2 staging phase!')
-            current_state = "SEARCHING"
+            current_state = DockState.SEARCHING
         else:
             # 3. Nav2 Staging Approach
             self.get_logger().info('Dock not visible. Sending goal to Nav2...')
@@ -295,16 +595,17 @@ class DockCoordinator(Node):
                 return result
 
             self.get_logger().info('Staging navigation complete. Transitioning to visual phases.')
-            current_state = "STAGING_CORRECTION"
+            current_state = DockState.STAGING_CORRECTION
 
-        state_start_t = time.perf_counter()
-        search_phase = 'pan_left'
-        lock_start_t = None
-        loss_start_t = None
-        prev_state = "SEARCHING"
-        self._center_seen_start_t = None
-        self._settle_start_t = None
-        self._last_center_seen_t = None
+        ctx = MissionContext(state_enter_t=time.perf_counter())
+        handlers = {
+            DockState.STAGING_CORRECTION: self._handle_staging_correction,
+            DockState.SEARCHING: self._handle_searching,
+            DockState.TRACKING: self._handle_tracking,
+            DockState.APPROACH: self._handle_approach,
+            DockState.LOST: self._handle_lost,
+            DockState.DOCKED: self._handle_docked,
+        }
 
         center_lock_time_s = float(self.get_parameter('center_lock_time_s').value)
         settle_time_s = float(self.get_parameter('settle_time_s').value)
@@ -312,6 +613,14 @@ class DockCoordinator(Node):
         correction_spin_speed = float(self.get_parameter('staging_correction_spin_speed').value)
         omega_sign_left = float(self.get_parameter('staging_correction_omega_sign_left').value)
         omega_sign_right = float(self.get_parameter('staging_correction_omega_sign_right').value)
+        params = {
+            'center_lock_time_s': center_lock_time_s,
+            'settle_time_s': settle_time_s,
+            'staging_correction_timeout_s': correction_timeout_s,
+            'staging_correction_spin_speed': correction_spin_speed,
+            'staging_correction_omega_sign_left': omega_sign_left,
+            'staging_correction_omega_sign_right': omega_sign_right,
+        }
 
         # Mission Loop (10Hz)
         while rclpy.ok():
@@ -323,244 +632,30 @@ class DockCoordinator(Node):
                 return result
 
             # Publish feedback status
-            feedback.state = current_state
+            feedback.state = current_state.name
             feedback.distance_m = self.lidar_front
             goal_handle.publish_feedback(feedback)
 
             # Check if pose is valid and fresh
             pose_msg = self.dock_pose_c
             pose_fresh = (pose_msg is not None) and (time.perf_counter() - self.last_pose_t < LOSS_FULL_TIME)
+            transition = handlers[current_state](ctx, pose_msg, pose_fresh, params)
 
-            # ── State: STAGING_CORRECTION ────────────────────────────────────
-            # Uses side marker visibility to rotate-in-place until the center marker is acquired.
-            if current_state == "STAGING_CORRECTION":
-                # If center marker is already visible, fall into SEARCHING which owns debounce/settle.
-                if pose_fresh and self.marker_best_id == 0:
-                    current_state = "SEARCHING"
-                    state_start_t = time.perf_counter()
-                    continue
+            if transition.next_state != current_state:
+                self._on_enter(transition.next_state, ctx, current_state)
+                current_state = transition.next_state
 
-                if (time.perf_counter() - state_start_t) > correction_timeout_s:
-                    self.get_logger().warn('STAGING_CORRECTION timeout. Falling back to SEARCHING.')
-                    current_state = "SEARCHING"
-                    search_phase = 'pan_left'
-                    state_start_t = time.perf_counter()
-                    continue
+            if transition.terminal == MissionTerminal.ABORTED:
+                self._stop_robot()
+                result.success = False
+                result.message = transition.message
+                goal_handle.abort()
+                return result
 
-                # Diff-drive safe: rotate in place. Use heuristic based on which side marker is seen.
-                omega = 0.0
-                if self.marker_best_id == 1:
-                    omega = omega_sign_left * correction_spin_speed
-                elif self.marker_best_id == 2:
-                    omega = omega_sign_right * correction_spin_speed
-                elif self.marker_best_id == 3:
-                    # Both sides visible but center not: stop rotation briefly to let debounce logic catch up,
-                    # then fall back to SEARCHING if center doesn't appear.
-                    omega = 0.0
-                else:
-                    # Nothing visible: defer to SEARCHING.
-                    current_state = "SEARCHING"
-                    search_phase = 'pan_left'
-                    state_start_t = time.perf_counter()
-                    continue
-
-                self._publish_vel(0.0, omega)
-                self._publish_head(0.0, 0.0)
-                time.sleep(0.1)
-                continue
-
-            # ── State: SEARCHING ──────────────────────────────────────────────
-            if current_state == "SEARCHING":
-                now = time.perf_counter()
-                
-                # Update debounce tracking if marker is visible
-                if pose_fresh and self.marker_best_id == 0:
-                    self._last_center_seen_t = now
-                    if self._center_seen_start_t is None:
-                        self._center_seen_start_t = now
-                        self._settle_start_t = None
-                
-                # Check if we are currently debouncing (marker seen recently)
-                is_debouncing = False
-                if self._center_seen_start_t is None:
-                    is_debouncing = False
-                else:
-                    # If marker drops out for more than 0.25s, abort debounce (fixes brittle resets)
-                    if now - getattr(self, '_last_center_seen_t', now) > 0.25:
-                        self._center_seen_start_t = None
-                        self._settle_start_t = None
-                        is_debouncing = False
-                    else:
-                        is_debouncing = True
-
-                if is_debouncing:
-                    # FIX 1: Instantly stop ALL movement the moment it's seen to prevent blur
-                    self._publish_vel(0.0, 0.0)
-                    # FIX 3: Keep the head frozen at the exact pan angle it was discovered at
-                    self._publish_head(self._pan_angle, 0.0)
-
-                    if (now - self._center_seen_start_t) >= center_lock_time_s:
-                        if self._settle_start_t is None:
-                            self._settle_start_t = now
-                        elif (now - self._settle_start_t) >= settle_time_s:
-                            self._center_seen_start_t = None
-                            self._settle_start_t = None
-                            current_state = "TRACKING"
-                            state_start_t = time.perf_counter()
-                    
-                    time.sleep(0.1)
-                    continue
-                
-                if time.perf_counter() - state_start_t > SEARCH_TIMEOUT:
-                    result.success = False
-                    result.message = "Search timeout"
-                    goal_handle.abort()
-                    self._stop_robot()
-                    return result
-
-                # Camera sweep & body spin
-                self._publish_vel(0.0, 0.0)
-                if search_phase == 'pan_left':
-                    self._pan_angle += 0.05
-                    if self._pan_angle >= 1.2: search_phase = 'pan_right'
-                elif search_phase == 'pan_right':
-                    self._pan_angle -= 0.05
-                    if self._pan_angle <= -1.2: search_phase = 'recenter'
-                elif search_phase == 'recenter':
-                    if self._pan_angle < -0.05: self._pan_angle += 0.05
-                    elif self._pan_angle > 0.05: self._pan_angle -= 0.05
-                    else:
-                        self._pan_angle = 0.0
-                        search_phase = 'spin'
-                elif search_phase == 'spin':
-                    self._publish_vel(0.0, SEARCH_SPIN_SPEED)
-                
-                self._publish_head(self._pan_angle, 0.0)
-
-            # ── Visual Servoing States ────────────────────────────────────────
-            elif current_state in ["TRACKING", "APPROACH"]:
-                if not pose_fresh:
-                    self._publish_vel(0.0, 0.0)
-                    if loss_start_t is None:
-                        loss_start_t = time.perf_counter()
-                    elif time.perf_counter() - loss_start_t > LOSS_FULL_TIME:
-                        current_state = "LOST"
-                        prev_state = current_state
-                    continue
-                
-                loss_start_t = None
-
-                # Transform pose dynamically to base_footprint using exact time stamp
-                try:
-                    transform = self.tf_buffer.lookup_transform(
-                        "base_footprint",
-                        pose_msg.header.frame_id,
-                        rclpy.time.Time.from_msg(pose_msg.header.stamp),
-                        rclpy.duration.Duration(seconds=0.1)
-                    )
-                    
-                    # Manual transform math for safety across Humble versions
-                    tx = transform.transform.translation.x
-                    ty = transform.transform.translation.y
-                    tz = transform.transform.translation.z
-                    qx = transform.transform.rotation.x
-                    qy = transform.transform.rotation.y
-                    qz = transform.transform.rotation.z
-                    qw = transform.transform.rotation.w
-                    
-                    q_trans = np.array([qx, qy, qz, qw])
-                    R_trans = quaternion_to_rotation_matrix(q_trans)
-                    
-                    px = pose_msg.pose.position.x
-                    py = pose_msg.pose.position.y
-                    pz = pose_msg.pose.position.z
-                    p_opt = np.array([px, py, pz])
-                    
-                    # Target point in base footprint frame
-                    p_base = np.dot(R_trans, p_opt) + np.array([tx, ty, tz])
-                    
-                    opx = pose_msg.pose.orientation.x
-                    opy = pose_msg.pose.orientation.y
-                    opz = pose_msg.pose.orientation.z
-                    opw = pose_msg.pose.orientation.w
-                    q_opt = np.array([opx, opy, opz, opw])
-                    
-                    q_base = multiply_quaternions(q_trans, q_opt)
-                    q_base /= np.linalg.norm(q_base)
-                    R_base = quaternion_to_rotation_matrix(q_base)
-                except Exception as e:
-                    self.get_logger().error(f"TF Transform failed: {e}")
-                    continue
-
-                x_d = p_base[1]  # lateral deviation (y in base_footprint)
-                z_d = p_base[0]  # depth (x in base_footprint)
-
-                # Active Camera Tracking: keep the marker in the center of the camera
-                # As the base steers to face the marker, p_base[1] goes to 0, 
-                # which naturally drives the camera pan back to 0.0.
-                marker_angle_base = math.atan2(p_base[1], p_base[0])
-                pan_error = marker_angle_base - self._pan_angle
-                self._pan_angle += KP_PAN * pan_error
-                self._tilt_angle = 0.0  # Lock horizontally
-
-                # Pure Pursuit steering model (L = 0.4m lookahead)
-                L = 0.4
-                target_z_dock = z_d - L
-                P_target_R = R_base[:, 2] * target_z_dock + p_base
-                alpha = np.arctan2(P_target_R[1], P_target_R[0])
-
-                # Control outputs
-                K_omega = 0.6
-                APPROACH_SPEED = 0.08  # m/s
-                
-                omega = K_omega * alpha
-                omega = max(-0.5, min(0.5, omega))  # Steering safety clamping
-                linear_v = max(0.0, APPROACH_SPEED * np.cos(alpha))
-
-                if current_state == "TRACKING":
-                    # Align body in place first
-                    self._publish_vel(0.0, omega)
-                    self._publish_head(self._pan_angle, self._tilt_angle)
-
-                    if abs(alpha) < 0.1:
-                        if lock_start_t is None: lock_start_t = time.perf_counter()
-                        elif time.perf_counter() - lock_start_t >= LOCK_DURATION:
-                            current_state = "APPROACH"
-                            self.get_logger().info('Alignment locked. Moving forward.')
-                    else:
-                        lock_start_t = None
-
-                elif current_state == "APPROACH":
-                    # Funnel Interlock logic (depth < 0.45m)
-                    if z_d < 0.45:
-                        self.get_logger().info(f'Funnel Interlock engaged (z_d = {z_d:.3f}m). Locking steering straight.')
-                        self._publish_vel(0.05, 0.0)
-                        self._publish_head(0.0, 0.0)
-                        
-                        if self.lidar_front < DOCK_LIDAR_DIST:
-                            current_state = "DOCKED"
-                    else:
-                        # Standard S-curve Pure Pursuit approach
-                        self._publish_vel(linear_v, omega)
-                        self._publish_head(self._pan_angle, self._tilt_angle)
-
-            # ── State: LOST ───────────────────────────────────────────────────
-            elif current_state == "LOST":
-                if pose_fresh:
-                    current_state = prev_state
-                    continue
-                
-                self._publish_vel(0.0, 0.0)
-                if time.perf_counter() - state_start_t > LOSS_FULL_TIME:
-                    current_state = "SEARCHING"
-                    search_phase = 'pan_left'
-                    state_start_t = time.perf_counter()
-
-            # ── State: DOCKED ─────────────────────────────────────────────────
-            elif current_state == "DOCKED":
+            if transition.terminal == MissionTerminal.SUCCEEDED:
                 self._stop_robot()
                 result.success = True
-                result.message = "Docking completed successfully"
+                result.message = transition.message
                 goal_handle.succeed()
                 return result
 
@@ -588,19 +683,41 @@ class DockCoordinator(Node):
             return
         self._last_marker_log_t = now
 
-        if self.marker_visible_mask == 0:
-            vis = []
-        else:
-            vis = []
-            if self.marker_visible_mask & 1: vis.append(0)
-            if self.marker_visible_mask & 2: vis.append(1)
-            if self.marker_visible_mask & 4: vis.append(2)
+        vis = []
+        if self.marker_visible_mask & 1:
+            vis.append(0)
+        if self.marker_visible_mask & 2:
+            vis.append(1)
+        if self.marker_visible_mask & 4:
+            vis.append(2)
 
         self.get_logger().info(f'dock_vis: best={self.marker_best_id} visible={vis}')
 
-    def _scan_cb(self, msg):
-        valid = [r for r in msg.ranges if 0.05 < r < 10.0]
+    def _scan_cb(self, msg: LaserScan):
+        if not msg.ranges:
+            return
+
+        inc = msg.angle_increment
+        if inc <= 0.0:
+            return
+
+        center_idx = int(round(-msg.angle_min / inc))
+        center_idx = max(0, min(len(msg.ranges) - 1, center_idx))
+        cone_half = int(round(math.radians(30.0) / inc))
+        lo = max(0, center_idx - cone_half)
+        hi = min(len(msg.ranges) - 1, center_idx + cone_half)
+        valid = [r for r in msg.ranges[lo:hi + 1] if 0.05 < r < 10.0]
         self.lidar_front = min(valid) if valid else 10.0
+
+        if not self._scan_meta_logged:
+            self._scan_meta_logged = True
+            self.get_logger().info(
+                'scan meta: '
+                f'angle_min={msg.angle_min:.3f}, '
+                f'angle_max={msg.angle_max:.3f}, '
+                f'angle_increment={msg.angle_increment:.6f}, '
+                f'center_idx={center_idx}'
+            )
 
     def _stop_robot(self):
         self._publish_vel(0.0, 0.0)
@@ -610,7 +727,6 @@ class DockCoordinator(Node):
         t = Twist()
         t.linear.x, t.angular.z = linear, angular
         self.vel_pub.publish(t)
-        self._last_twist = t
 
     def _publish_head(self, pan, tilt):
         msg = Float64MultiArray()
