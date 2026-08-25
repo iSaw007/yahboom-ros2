@@ -51,8 +51,6 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_footprint
     odom_frame: odom
-    default_bt_xml_filename: "navigate_to_pose_w_replanning_and_recovery.xml"
-    default_nav_through_poses_bt_xml: "/home/salah/Storage/ros2-test/install/yahboomcar_control_bringup/share/yahboomcar_control_bringup/config/nav2_navigate_through_poses_mppi_bt.xml"
     plugin_lib_names:
     - nav2_compute_path_to_pose_action_bt_node
     - nav2_compute_path_through_poses_action_bt_node

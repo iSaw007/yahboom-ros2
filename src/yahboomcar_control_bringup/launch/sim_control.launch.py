@@ -129,27 +129,27 @@ def generate_launch_description() -> LaunchDescription:
     joint_state_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager", "--controller-manager-timeout", "60"],
         output=node_output,
     )
 
     diff_drive_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["diff_drive_controller", "--controller-manager", "/controller_manager"],
+        arguments=["diff_drive_controller", "--controller-manager", "/controller_manager", "--controller-manager-timeout", "60"],
         output=node_output,
     )
 
-    camera_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["camera_controller", "--controller-manager", "/controller_manager"],
-        output=node_output,
-    )
+    # --- OPTION B: Camera spawner (Commented out to reduce APU load/service congestion) ---
+    # To re-enable camera pan/tilt controller, uncomment camera_spawner here and camera_handler below.
+    # camera_spawner = Node(
+    #     package="controller_manager",
+    #     executable="spawner",
+    #     arguments=["camera_controller", "--controller-manager", "/controller_manager", "--controller-manager-timeout", "60"],
+    #     output=node_output,
+    # )
 
     # Start ros2_control spawners only after the model creation process has exited.
-    # The LiDAR-enabled model takes longer to spawn, so a fixed timer can race the
-    # controller_manager startup and leave the spawners waiting forever.
     ekf_node = Node(
         package="robot_localization",
         executable="ekf_node",
@@ -158,17 +158,35 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[ekf_config_path, {"use_sim_time": use_sim_time}],
     )
 
-    controller_spawners = RegisterEventHandler(
+    # --- OPTION A: Sequential Spawning to prevent controller_manager service congestion on slower CPUs/APUs ---
+    # Step 1: Joint state broadcaster starts after model creation + 5s delay for Gazebo system plugin activation
+    joint_state_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=spawn,
             on_exit=[
                 TimerAction(
-                    period=2.0,
-                    actions=[joint_state_spawner, diff_drive_spawner, camera_spawner],
+                    period=5.0,
+                    actions=[joint_state_spawner],
                 )
             ],
         )
     )
+
+    # Step 2: Diff drive controller starts ONLY after joint_state_broadcaster successfully configures and exits
+    diff_drive_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=joint_state_spawner,
+            on_exit=[diff_drive_spawner],
+        )
+    )
+
+    # Step 3: Camera controller (Optional, uncomment if camera_spawner is enabled)
+    # camera_handler = RegisterEventHandler(
+    #     OnProcessExit(
+    #         target_action=diff_drive_spawner,
+    #         on_exit=[camera_spawner],
+    #     )
+    # )
 
     # Bridge /cmd_vel (standard) to /diff_drive_controller/cmd_vel_unstamped (Humble default)
     cmd_vel_relay = Node(
@@ -224,7 +242,9 @@ def generate_launch_description() -> LaunchDescription:
             robot_state_publisher,
             spawn,
             ekf_node,
-            controller_spawners,
+            joint_state_handler,
+            diff_drive_handler,
+            # camera_handler,
             cmd_vel_relay,
         ]
     )

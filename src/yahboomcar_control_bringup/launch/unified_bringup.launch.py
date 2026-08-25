@@ -1,5 +1,5 @@
 import os
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -37,10 +37,15 @@ def generate_launch_description():
     headless_arg = DeclareLaunchArgument(
         "headless", default_value="false", description="Run Gazebo headless"
     )
+    world_arg = DeclareLaunchArgument(
+        "world",
+        default_value=os.path.join(bringup_share, "worlds", "empty.sdf"),
+        description="Path to Gazebo world SDF file"
+    )
     
     map_arg = DeclareLaunchArgument(
         "map",
-        default_value="/home/salah/Storage/ros2-test/mapsave1.yaml",
+        default_value=os.path.join(bringup_share, "..", "..", "mapsave1.yaml"),
         description="Path to map yaml file"
     )
     nav2_params_arg = DeclareLaunchArgument(
@@ -57,30 +62,41 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "headless": LaunchConfiguration("headless"),
             "quiet": LaunchConfiguration("quiet"),
+            "world": LaunchConfiguration("world"),
         }.items()
     )
 
     # 2. Rosbridge WebSocket server
-    rosbridge = IncludeLaunchDescription(
-        XMLLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("rosbridge_server"),
-                "launch",
-                "rosbridge_websocket_launch.xml"
-            )
-        ),
-        condition=IfCondition(LaunchConfiguration("rosbridge"))
-    )
+    rosbridge = None
+    try:
+        rosbridge_share = get_package_share_directory("rosbridge_server")
+        rosbridge = IncludeLaunchDescription(
+            XMLLaunchDescriptionSource(
+                os.path.join(
+                    rosbridge_share,
+                    "launch",
+                    "rosbridge_websocket_launch.xml"
+                )
+            ),
+            condition=IfCondition(LaunchConfiguration("rosbridge"))
+        )
+    except PackageNotFoundError:
+        rosbridge = None
 
     # 3. Web Video Server
-    web_video_server = Node(
-        package="web_video_server",
-        executable="web_video_server",
-        name="web_video_server",
-        output=PythonExpression(["'log' if '", LaunchConfiguration("quiet"), "' == 'true' else 'screen'"]),
-        condition=IfCondition(LaunchConfiguration("video_server")),
-        parameters=[{"port": 8080}]
-    )
+    web_video_server = None
+    try:
+        get_package_share_directory("web_video_server")
+        web_video_server = Node(
+            package="web_video_server",
+            executable="web_video_server",
+            name="web_video_server",
+            output=PythonExpression(["'log' if '", LaunchConfiguration("quiet"), "' == 'true' else 'screen'"]),
+            condition=IfCondition(LaunchConfiguration("video_server")),
+            parameters=[{"port": 8080}]
+        )
+    except PackageNotFoundError:
+        web_video_server = None
 
     # 4. Navigation Stack (Nav2)
     nav2 = IncludeLaunchDescription(
@@ -100,7 +116,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("dock")),
     )
 
-    return LaunchDescription([
+    launch_actions = [
         sim_arg,
         nav_arg,
         dock_arg,
@@ -109,11 +125,16 @@ def generate_launch_description():
         use_sim_time_arg,
         quiet_arg,
         headless_arg,
+        world_arg,
         map_arg,
         nav2_params_arg,
         sim_control,
-        rosbridge,
-        web_video_server,
         nav2,
-        dock
-    ])
+        dock,
+    ]
+    if rosbridge is not None:
+        launch_actions.insert(len(launch_actions) - 2, rosbridge)
+    if web_video_server is not None:
+        launch_actions.insert(len(launch_actions) - 2, web_video_server)
+
+    return LaunchDescription(launch_actions)
